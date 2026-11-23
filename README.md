@@ -33,6 +33,36 @@ cd parkour_tasks && pip3 install -e .
 python scripts/rsl_rl/train.py --task Isaac-Extreme-Parkour-Teacher-Unitree-Go2-v0 --seed 1 --headless
 ```
 
+To resume from the bundled teacher checkpoint for another 1,000 PPO iterations, run from the repository root:
+
+```bash
+PYTHONPATH=. python scripts/rsl_rl/train.py \
+  --task Isaac-Extreme-Parkour-Teacher-Unitree-Go2-v0 \
+  --seed 1 --headless --resume \
+  --checkpoint checkpoints/teacher/model_4999.pt \
+  --max_iterations 1000 --run_name teacher_resume
+```
+
+The resumed run writes checkpoints to a new directory under `logs/rsl_rl/unitree_go2_parkour/`.
+This runner uses the RSL-RL 2.x API. Isaac Lab 2.2.1 pins RSL-RL 2.3.3 and provides
+the `dump_pickle` helper used by the training script.
+
+On this workstation, `.venv` contains Isaac Lab 2.2.1 and RSL-RL 2.3.3 and shares
+Isaac Sim and PyTorch with the `env_isaaclab` conda environment. Use its Python
+directly to resume for another 20,000 iterations with 4,096 environments:
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/rsl_rl/train.py \
+  --task Isaac-Extreme-Parkour-Teacher-Unitree-Go2-v0 \
+  --resume --checkpoint checkpoints/teacher/model_4999.pt \
+  --num_envs 4096 --max_iterations 20000 \
+  --seed 1 --headless --run_name teacher_resume
+```
+
+The startup check loaded checkpoint iteration 4,999 and stepped eight environments
+on a smaller terrain grid. Training throughput and memory usage at 4,096 environments
+require measurement during the training run.
+
 ### 1.2. Training Student Policy
 
 ```
@@ -40,6 +70,12 @@ python scripts/rsl_rl/train.py --task Isaac-Extreme-Parkour-Student-Unitree-Go2-
 ```
 
 ## How to play your policy 
+
+### Two-hurdle Rough Walk checkpoint
+
+The bundled `checkpoints/two_hurdle_gait/model_500.pt` is iteration 500 of the `two_hurdle_gait` run. With the project environment in `.venv`, run `bash play.sh 1 0` from the repository root to play it on terrain level 0. The third argument accepts another checkpoint path.
+
+For training from a local walking checkpoint, pass its path as the third argument to `bash train.sh 2048 5000`. Training runs write their logs under `logs/`.
 
 ### 2.1. Pretrained Teacher Policy 
 

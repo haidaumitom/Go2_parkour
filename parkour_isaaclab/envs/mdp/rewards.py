@@ -219,3 +219,61 @@ def reward_collision(
     contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
     net_contact_forces = contact_sensor.data.net_forces_w_history[:,0,sensor_cfg.body_ids]
     return torch.sum(1.*(torch.norm(net_contact_forces, dim=-1) > 0.1), dim=1)
+
+
+def estimate_ground_height(ray_hits_w: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return mean ground height and a valid-hit mask for each environment."""
+    heights = ray_hits_w[..., 2]
+    valid = torch.isfinite(heights)
+    count = valid.sum(dim=1)
+    mean = torch.where(valid, heights, 0.0).sum(dim=1) / count.clamp_min(1)
+    return mean, count > 0
+
+
+def joint_power(env, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+    """Sum absolute mechanical power at the selected joints."""
+    data = env.scene[asset_cfg.name].data
+    return (data.applied_torque[:, asset_cfg.joint_ids] * data.joint_vel[:, asset_cfg.joint_ids]).abs().sum(dim=1)
+
+
+class JointTargetSmoothness(ManagerTermBase):
+    """Penalize the second difference of processed joint position targets."""
+
+    def __init__(self, cfg: RewardTermCfg, env):
+        super().__init__(cfg, env)
+        self.action = env.action_manager.get_term(cfg.params["action_name"])
+        self.previous_target = torch.zeros_like(self.action.processed_actions)
+        self.previous_delta = torch.zeros_like(self.previous_target)
+        self.steps = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
+
+    def reset(self, env_ids=None):
+        self.steps[slice(None) if env_ids is None else env_ids] = 0
+
+    def __call__(self, env, action_name: str) -> torch.Tensor:
+        target = self.action.processed_actions
+        delta = target - self.previous_target
+        penalty = (delta - self.previous_delta).square().sum(dim=1)
+        self.previous_target.copy_(target)
+        self.previous_delta.copy_(delta)
+        self.steps.add_(1).clamp_max_(3)
+        return penalty * (self.steps == 3)
+
+
+def foot_clearance_penalty(
+    env,
+    asset_cfg: SceneEntityCfg,
+    sensor_cfg: SceneEntityCfg,
+    contact_cfg: SceneEntityCfg,
+    target_height: float,
+    tanh_mult: float,
+) -> torch.Tensor:
+    """Penalize moving swing feet for deviating from terrain-relative clearance."""
+    asset: Articulation = env.scene[asset_cfg.name]
+    ground_height, ground_valid = estimate_ground_height(env.scene.sensors[sensor_cfg.name].data.ray_hits_w)
+
+    clearance = asset.data.body_pos_w[:, asset_cfg.body_ids, 2] - ground_height[:, None]
+    foot_speed = asset.data.body_lin_vel_w[:, asset_cfg.body_ids, :2].norm(dim=-1)
+    contact_forces = env.scene.sensors[contact_cfg.name].data.net_forces_w[:, contact_cfg.body_ids]
+    swinging = contact_forces.norm(dim=-1) <= 1.0
+    penalty = (clearance - target_height).square() * torch.tanh(tanh_mult * foot_speed)
+    return torch.where(swinging & ground_valid[:, None], penalty, 0.0).sum(dim=1)

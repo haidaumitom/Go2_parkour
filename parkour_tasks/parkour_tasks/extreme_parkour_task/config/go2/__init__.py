@@ -12,6 +12,44 @@ import gymnasium as gym
 
 from . import agents
 
+for task_suffix, env_cfg in (
+    ("", "UnitreeGo2RoughWalkEnvCfg"),
+    ("-Play", "UnitreeGo2RoughWalkPlayEnvCfg"),
+):
+    gym.register(
+        id=f"Isaac-Rough-Walk-Unitree-Go2{task_suffix}-v0",
+        entry_point="isaaclab.envs:ManagerBasedRLEnv",
+        disable_env_checker=True,
+        kwargs={
+            "env_cfg_entry_point": f"{__name__}.rough_walk_cfg:{env_cfg}",
+            "rsl_rl_cfg_entry_point": f"{__name__}.rough_walk_cfg:UnitreeGo2RoughWalkPPORunnerCfg",
+        },
+    )
+
+for task_suffix, env_cfg in (
+    ("", "UnitreeGo2TwoHurdleEnvCfg"),
+    ("-Play", "UnitreeGo2TwoHurdlePlayEnvCfg"),
+):
+    gym.register(
+        id=f"Isaac-Rough-Walk-Two-Hurdle-Unitree-Go2{task_suffix}-v0",
+        entry_point="isaaclab.envs:ManagerBasedRLEnv",
+        disable_env_checker=True,
+        kwargs={
+            "env_cfg_entry_point": f"{__name__}.rough_walk_cfg:{env_cfg}",
+            "rsl_rl_cfg_entry_point": f"{__name__}.rough_walk_cfg:UnitreeGo2TwoHurdlePPORunnerCfg",
+        },
+    )
+
+gym.register(
+    id="Isaac-Rough-Walk-Hurdles-V1-Unitree-Go2-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.hurdles_v1_play_cfg:UnitreeGo2HurdlesV1PlayEnvCfg",
+        "rsl_rl_cfg_entry_point": f"{__name__}.rough_walk_cfg:UnitreeGo2RoughWalkPPORunnerCfg",
+    },
+)
+
 ##
 # Register Gym environments.
 ##

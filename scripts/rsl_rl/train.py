@@ -25,6 +25,7 @@ parser.add_argument("--num_envs", type=int, default=None, help="Number of enviro
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment")
 parser.add_argument("--max_iterations", type=int, default=None, help="RL Policy training iterations.")
+parser.add_argument("--reset_iteration", action="store_true", help="Start iteration numbering at zero after resuming.")
 parser.add_argument(
     "--distributed", action="store_true", default=False, help="Run training with multiple GPUs or nodes."
 )
@@ -75,6 +76,8 @@ import torch
 from datetime import datetime
 
 from scripts.rsl_rl.modules.on_policy_runner_with_extractor import OnPolicyRunnerWithExtractor
+from scripts.rsl_rl.modules.rough_walk_runner import RoughWalkOnPolicyRunner
+from rsl_rl.runners import OnPolicyRunner
 
 from isaaclab.envs import (
     DirectMARLEnv,
@@ -85,15 +88,14 @@ from isaaclab.envs import (
 )
 from isaaclab.utils.dict import print_dict
 from isaaclab.utils.io import dump_pickle, dump_yaml
+from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper
 from parkour_tasks.extreme_parkour_task.config.go2.agents.parkour_rl_cfg import ParkourRslRlOnPolicyRunnerCfg
+from parkour_tasks.extreme_parkour_task.config.go2.rough_walk_cfg import UnitreeGo2RoughWalkPPORunnerCfg
 from scripts.rsl_rl.vecenv_wrapper import ParkourRslRlVecEnvWrapper
 # import isaaclab_tasks  # noqa: F401
 import parkour_tasks  # noqa: F401
 from isaaclab_tasks.utils import get_checkpoint_path
 from isaaclab_tasks.utils.hydra import hydra_task_config
-from parkour_isaaclab.envs import (
-ParkourManagerBasedRLEnv
-)
 # PLACEHOLDER: Extension template (do not remove this comment)
 
 torch.backends.cuda.matmul.allow_tf32 = True
@@ -103,7 +105,7 @@ torch.backends.cudnn.benchmark = False
 
 
 @hydra_task_config(args_cli.task, "rsl_rl_cfg_entry_point")
-def main(env_cfg: ParkourManagerBasedRLEnv |ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: ParkourRslRlOnPolicyRunnerCfg):
+def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
     """Train with RSL-RL agent."""
     
 
@@ -129,6 +131,11 @@ def main(env_cfg: ParkourManagerBasedRLEnv |ManagerBasedRLEnvCfg | DirectRLEnvCf
         env_cfg.seed = seed
         agent_cfg.seed = seed
 
+    if args_cli.reset_iteration and not agent_cfg.resume:
+        raise ValueError("--reset_iteration requires --resume")
+    if getattr(agent_cfg, "preserve_walking_gait", False) and not agent_cfg.resume:
+        raise ValueError("The two-hurdle task requires --resume with a walking gait or two-hurdle checkpoint.")
+
     # specify directory for logging experiments
     log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
     log_root_path = os.path.abspath(log_root_path)
@@ -142,6 +149,13 @@ def main(env_cfg: ParkourManagerBasedRLEnv |ManagerBasedRLEnvCfg | DirectRLEnvCf
         
     log_dir = os.path.join(log_root_path, log_dir)
 
+    # Resolve the checkpoint before creating the environment or the new run directory.
+    if agent_cfg.resume or agent_cfg.algorithm.class_name == "DistillationWithExtractor":
+        if args_cli.checkpoint is not None and os.path.isfile(os.path.expanduser(args_cli.checkpoint)):
+            resume_path = os.path.abspath(os.path.expanduser(args_cli.checkpoint))
+        else:
+            resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
+
     # create isaac environment
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
 
@@ -149,10 +163,6 @@ def main(env_cfg: ParkourManagerBasedRLEnv |ManagerBasedRLEnvCfg | DirectRLEnvCf
     if isinstance(env.unwrapped, DirectMARLEnv):
         env = multi_agent_to_single_agent(env)
     
-    # save resume path before creating a new log_dir
-    if agent_cfg.resume or agent_cfg.algorithm.class_name == "DistillationWithExtractor":
-        resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
-
     # # wrap for video recording
     if args_cli.video:
         video_kwargs = {
@@ -165,10 +175,13 @@ def main(env_cfg: ParkourManagerBasedRLEnv |ManagerBasedRLEnvCfg | DirectRLEnvCf
         print_dict(video_kwargs, nesting=4)
         env = gym.wrappers.RecordVideo(env, **video_kwargs)
 
-    # wrap around environment for rsl-rl
-    env = ParkourRslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
-    # # create runner from rsl-rl
-    runner = OnPolicyRunnerWithExtractor(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
+    uses_extractor = isinstance(agent_cfg, ParkourRslRlOnPolicyRunnerCfg)
+    wrapper_class = ParkourRslRlVecEnvWrapper if uses_extractor else RslRlVecEnvWrapper
+    runner_class = OnPolicyRunnerWithExtractor if uses_extractor else OnPolicyRunner
+    if isinstance(agent_cfg, UnitreeGo2RoughWalkPPORunnerCfg):
+        runner_class = RoughWalkOnPolicyRunner
+    env = wrapper_class(env, clip_actions=agent_cfg.clip_actions)
+    runner = runner_class(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
     # # write git state to logs
     runner.add_git_repo_to_log(__file__)
     # load the checkpoint
@@ -176,6 +189,9 @@ def main(env_cfg: ParkourManagerBasedRLEnv |ManagerBasedRLEnvCfg | DirectRLEnvCf
         print(f"[INFO]: Loading model checkpoint from: {resume_path}")
         # load previously trained model
         runner.load(resume_path)
+        if args_cli.reset_iteration:
+            runner.current_learning_iteration = 0
+            print("[INFO]: Starting the new run at iteration 0.")
     # dump the configuration into log-directory
     dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
     dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
@@ -183,7 +199,7 @@ def main(env_cfg: ParkourManagerBasedRLEnv |ManagerBasedRLEnvCfg | DirectRLEnvCf
     dump_pickle(os.path.join(log_dir, "params", "agent.pkl"), agent_cfg)
 
     # # # run training
-    runner.learn(num_learning_iterations=agent_cfg.max_iterations, init_at_random_ep_len=True)
+    runner.learn(num_learning_iterations=agent_cfg.max_iterations, init_at_random_ep_len=uses_extractor)
 
     # close the simulator
     env.close()

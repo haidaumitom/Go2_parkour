@@ -335,16 +335,28 @@ class EventCfg:
         },
     )
 
+# @configclass
+# class ActionsCfg:
+#     joint_pos = DelayedJointPositionActionCfg(
+#         asset_name="robot",
+#         joint_names=[".*"],
+#         scale=0.25,
+#         use_default_offset=True,
+#         action_delay_steps = [1, 1],
+#         delay_update_global_steps = 24 * 8000,
+#         history_length = 8,
+#         use_delay = True,
+#         clip = {'.*': (-4.8,4.8)}
+#         )
+
 @configclass
 class ActionsCfg:
     joint_pos = DelayedJointPositionActionCfg(
-        asset_name="robot", 
-        joint_names=[".*"], 
-        scale=0.25, 
+        asset_name="robot",
+        joint_names=[".*"],
+        scale=0.25,
         use_default_offset=True,
-        action_delay_steps = [1, 1],
-        delay_update_global_steps = 24 * 8000,
-        history_length = 8,
-        use_delay = True,
-        clip = {'.*': (-4.8,4.8)}
-        )
+        history_length=1,
+        use_delay=False,
+        clip={".*": (-4.8, 4.8)},
+    )
